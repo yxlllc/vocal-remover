@@ -1,7 +1,5 @@
 import argparse
-from datetime import datetime
 import json
-import logging
 import os
 import random
 
@@ -12,82 +10,52 @@ import torch.utils.data
 
 from lib import dataset
 from lib import nets
-from lib import spec_utils
+from logger.saver import Saver
+from logger import utils
 
 
-def setup_logger(name, logfile='LOGFILENAME.log'):
-    logger = logging.getLogger(name)
-    logger.setLevel(logging.DEBUG)
-    logger.propagate = False
-
-    fh = logging.FileHandler(logfile, encoding='utf8')
-    fh.setLevel(logging.DEBUG)
-    fh_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    fh.setFormatter(fh_formatter)
-
-    sh = logging.StreamHandler()
-    sh.setLevel(logging.INFO)
-
-    logger.addHandler(fh)
-    logger.addHandler(sh)
-
-    return logger
-
-
-def to_wave(spec, n_fft, hop_length, window):
-    B, _, N, T = spec.shape
-    wave = spec.reshape(-1, N, T)
-    wave = torch.istft(wave, n_fft, hop_length, window=window)
-    wave = wave.reshape(B, 2, -1)
-
-    return wave
-
-
-def sdr_loss(y, y_pred, eps=1e-8):
-    sdr = (y * y_pred).sum()
-    sdr /= torch.linalg.norm(y) * torch.linalg.norm(y_pred) + eps
-
-    return -sdr
-
-
-def weighted_sdr_loss(y, y_pred, n, n_pred, eps=1e-8):
-    y_sdr = (y * y_pred).sum()
-    y_sdr /= torch.linalg.norm(y) * torch.linalg.norm(y_pred) + eps
-
-    noise_sdr = (n * n_pred).sum()
-    noise_sdr /= torch.linalg.norm(n) * torch.linalg.norm(n_pred) + eps
-
-    a = torch.sum(y ** 2)
-    a /= torch.sum(y ** 2) + torch.sum(n ** 2) + eps
-
-    loss = a * y_sdr + (1 - a) * noise_sdr
-
-    return -loss
-
-
-def train_epoch(dataloader, model, device, optimizer, accumulation_steps):
+def train_epoch(dataloader, model, device, optimizer, saver, epoch, accumulation_steps):
     model.train()
-    # n_fft = model.n_fft
-    # hop_length = model.hop_length
-    # window = torch.hann_window(n_fft).to(device)
-
     sum_loss = 0
     crit_l1 = nn.L1Loss()
 
     for itr, (X_batch, y_batch) in enumerate(dataloader):
+        saver.global_step_increment()
         X_batch = X_batch.to(device)
-        y_batch = y_batch.to(device)
+        y_batch = y_batch = y_batch.to(device)
+        y_pred = model.predict_fromaudio(X_batch)
+        
+        X_batch_amp = X_batch.abs().amax(dim=(1,2)).reshape(-1,1,1) + 1e-3
+        y_pred = y_pred / X_batch_amp
+        y_batch = y_batch / X_batch_amp
+        
+        y_spec_pred = model.audio2spec(y_pred)      
+        y_spec_batch = model.audio2spec(y_batch)
 
-        mask = model(X_batch)
+        spec_loss = crit_l1(y_spec_batch, y_spec_pred)
+        wav_loss = crit_l1(y_batch, y_pred)
+        loss = spec_loss + wav_loss
 
-        # y_pred = X_batch * mask
-        # y_wave_batch = to_wave(y_batch, n_fft, hop_length, window)
-        # y_wave_pred = to_wave(y_pred, n_fft, hop_length, window)
-
-        # loss = crit_l1(torch.abs(y_batch), torch.abs(y_pred))
-        # loss += sdr_loss(y_wave_batch, y_wave_pred) * 0.01
-        loss = crit_l1(mask * X_batch, y_batch)
-
+        current_lr =  optimizer.param_groups[0]['lr']
+        saver.log_info(
+                'epoch: {} | {:3d}/{:3d} | {} | batch/s: {:.2f} | lr: {:.6} | loss: {:.6f} | time: {} | step: {}'.format(
+                    epoch,
+                    itr,
+                    len(dataloader),
+                    saver.expdir,
+                    1 / saver.get_interval_time(),
+                    current_lr,
+                    loss.item(),
+                    saver.get_total_time(),
+                    saver.global_step
+                )
+        )
+        saver.log_value({
+            'train/epoch': epoch, 
+            'train/loss': loss.item(),
+            'train/spec_loss': spec_loss.item(),  
+            'train/wav_loss': wav_loss.item(),            
+            'train/lr': current_lr})
         accum_loss = loss / accumulation_steps
         accum_loss.backward()
 
@@ -97,7 +65,6 @@ def train_epoch(dataloader, model, device, optimizer, accumulation_steps):
 
         sum_loss += loss.item() * len(X_batch)
 
-    # the rest batch
     if (itr + 1) % accumulation_steps != 0:
         optimizer.step()
         model.zero_grad()
@@ -105,33 +72,39 @@ def train_epoch(dataloader, model, device, optimizer, accumulation_steps):
     return sum_loss / len(dataloader.dataset)
 
 
-def validate_epoch(dataloader, model, device):
+def validate_epoch(dataloader, model, device, saver):
     model.eval()
-    # n_fft = model.n_fft
-    # hop_length = model.hop_length
-    # window = torch.hann_window(n_fft).to(device)
 
+    sum_spec_loss = 0
+    sum_wav_loss = 0
     sum_loss = 0
     crit_l1 = nn.L1Loss()
 
     with torch.no_grad():
         for X_batch, y_batch in dataloader:
-            X_batch = X_batch.to(device)
+            y_pred = model.predict_fromaudio(X_batch.to(device))
             y_batch = y_batch.to(device)
+                     
+            y_spec_pred = model.audio2spec(y_pred)      
+            y_spec_batch = model.audio2spec(y_batch)
 
-            y_pred = model.predict(X_batch)
+            spec_loss = crit_l1(y_spec_batch, y_spec_pred)
+            wav_loss = crit_l1(y_batch, y_pred)
+            loss = spec_loss + wav_loss
 
-            y_batch = spec_utils.crop_center(y_batch, y_pred)
-            # y_wave_batch = to_wave(y_batch, n_fft, hop_length, window)
-            # y_wave_pred = to_wave(y_pred, n_fft, hop_length, window)
-
-            # loss = crit_l1(torch.abs(y_batch), torch.abs(y_pred))
-            # loss += sdr_loss(y_wave_batch, y_wave_pred) * 0.01
-            loss = crit_l1(y_pred, y_batch)
-
+            sum_spec_loss += spec_loss.item() * len(X_batch)
+            sum_wav_loss += wav_loss.item() * len(X_batch)
             sum_loss += loss.item() * len(X_batch)
-
-    return sum_loss / len(dataloader.dataset)
+            
+    mean_spec_loss = sum_spec_loss / len(dataloader.dataset)
+    mean_wav_loss = sum_wav_loss / len(dataloader.dataset)
+    mean_loss = sum_loss / len(dataloader.dataset)
+    saver.log_info(' --- <validation> --- loss: {:.6f} '.format(mean_loss))
+    saver.log_value({
+        'validation/loss': mean_loss,
+        'validation/spec_loss': mean_spec_loss,
+        'validation/wav_loss': mean_wav_loss})
+    return mean_loss
 
 
 def main():
@@ -139,33 +112,30 @@ def main():
     p.add_argument('--gpu', '-g', type=int, default=-1)
     p.add_argument('--seed', '-s', type=int, default=2019)
     p.add_argument('--sr', '-r', type=int, default=44100)
-    p.add_argument('--hop_length', '-H', type=int, default=1024)
+    p.add_argument('--hop_length', '-H', type=int, default=512)
     p.add_argument('--n_fft', '-f', type=int, default=2048)
+    p.add_argument('--n_out', '-J', type=int, default=32)
+    p.add_argument('--n_out_lstm', '-K', type=int, default=128)
     p.add_argument('--dataset', '-d', required=True)
     p.add_argument('--split_mode', '-S', type=str, choices=['random', 'subdirs'], default='random')
-    p.add_argument('--learning_rate', '-l', type=float, default=0.001)
-    p.add_argument('--lr_min', type=float, default=0.0001)
+    p.add_argument('--learning_rate', '-l', type=float, default=0.0005)
+    p.add_argument('--lr_min', type=float, default=0.00001)
     p.add_argument('--lr_decay_factor', type=float, default=0.9)
     p.add_argument('--lr_decay_patience', type=int, default=6)
     p.add_argument('--batchsize', '-B', type=int, default=4)
     p.add_argument('--accumulation_steps', '-A', type=int, default=1)
-    p.add_argument('--cropsize', '-C', type=int, default=256)
-    p.add_argument('--patches', '-p', type=int, default=16)
-    p.add_argument('--val_rate', '-v', type=float, default=0.2)
+    p.add_argument('--cropsize', '-C', type=int, default=128)
+    p.add_argument('--val_num', '-v', type=float, default=10)
     p.add_argument('--val_filelist', '-V', type=str, default=None)
-    p.add_argument('--val_batchsize', '-b', type=int, default=4)
-    p.add_argument('--val_cropsize', '-c', type=int, default=256)
     p.add_argument('--num_workers', '-w', type=int, default=4)
     p.add_argument('--epoch', '-E', type=int, default=200)
-    p.add_argument('--reduction_rate', '-R', type=float, default=0.0)
-    p.add_argument('--reduction_level', '-L', type=float, default=0.2)
-    p.add_argument('--mixup_rate', '-M', type=float, default=0.0)
+    p.add_argument('--mixup_rate', '-M', type=float, default=0.5)
     p.add_argument('--mixup_alpha', '-a', type=float, default=1.0)
     p.add_argument('--pretrained_model', '-P', type=str, default=None)
+    p.add_argument('--exp_name', '-N', type=str, default="model_test")
+    p.add_argument('--mono', action='store_true')
     p.add_argument('--debug', action='store_true')
     args = p.parse_args()
-
-    logger.debug(vars(args))
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -179,34 +149,18 @@ def main():
     train_filelist, val_filelist = dataset.train_val_split(
         dataset_dir=args.dataset,
         split_mode=args.split_mode,
-        val_rate=args.val_rate,
+        val_num=args.val_num,
         val_filelist=val_filelist
     )
 
     if args.debug:
-        logger.info('### DEBUG MODE')
         train_filelist = train_filelist[:1]
         val_filelist = val_filelist[:1]
-    elif args.val_filelist is None and args.split_mode == 'random':
-        with open('val_{}.json'.format(timestamp), 'w', encoding='utf8') as f:
-            json.dump(val_filelist, f, ensure_ascii=False)
-
-    for i, (X_fname, y_fname) in enumerate(val_filelist):
-        logger.info('{} {} {}'.format(i + 1, os.path.basename(X_fname), os.path.basename(y_fname)))
-
-    bins = args.n_fft // 2 + 1
-    freq_to_bin = 2 * bins / args.sr
-    unstable_bins = int(200 * freq_to_bin)
-    stable_bins = int(22050 * freq_to_bin)
-    reduction_weight = np.concatenate([
-        np.linspace(0, 1, unstable_bins, dtype=np.float32)[:, None],
-        np.linspace(1, 0, stable_bins - unstable_bins, dtype=np.float32)[:, None],
-        np.zeros((bins - stable_bins, 1), dtype=np.float32),
-    ], axis=0) * args.reduction_level
 
     device = torch.device('cpu')
-    model = nets.CascadedNet(args.n_fft, args.hop_length, 32, 128)
+    model = nets.CascadedNet(args.n_fft, args.hop_length, args.n_out, args.n_out_lstm, True, is_mono=args.mono)
     if args.pretrained_model is not None:
+        print("loading pretrained model: "+ args.pretrained_model)
         model.load_state_dict(torch.load(args.pretrained_model, map_location=device))
     if torch.cuda.is_available() and args.gpu >= 0:
         device = torch.device('cuda:{}'.format(args.gpu))
@@ -226,18 +180,11 @@ def main():
         verbose=True
     )
 
-    training_set = dataset.make_training_set(
-        filelist=train_filelist,
+    train_dataset = dataset.VocalRemoverTrainingSet(
+        train_filelist,
         sr=args.sr,
         hop_length=args.hop_length,
-        n_fft=args.n_fft
-    )
-
-    train_dataset = dataset.VocalRemoverTrainingSet(
-        training_set * args.patches,
         cropsize=args.cropsize,
-        reduction_rate=args.reduction_rate,
-        reduction_weight=reduction_weight,
         mixup_rate=args.mixup_rate,
         mixup_alpha=args.mixup_alpha
     )
@@ -246,59 +193,38 @@ def main():
         dataset=train_dataset,
         batch_size=args.batchsize,
         shuffle=True,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        persistent_workers=(args.num_workers > 0),
+        pin_memory=True
     )
-
-    patch_list = dataset.make_validation_set(
-        filelist=val_filelist,
-        cropsize=args.val_cropsize,
-        sr=args.sr,
-        hop_length=args.hop_length,
-        n_fft=args.n_fft,
-        offset=model.offset
-    )
-
+        
     val_dataset = dataset.VocalRemoverValidationSet(
-        patch_list=patch_list
+        val_filelist,
+        sr=args.sr
     )
 
     val_dataloader = torch.utils.data.DataLoader(
         dataset=val_dataset,
-        batch_size=args.val_batchsize,
+        batch_size=1,
         shuffle=False,
-        num_workers=args.num_workers
+        num_workers=0,
+        pin_memory=True
     )
-
-    log = []
-    best_loss = np.inf
+    
+    saver = Saver(args)
+    
+    params_count = utils.get_network_paras_amount({'model': model})
+    saver.log_info('--- model size ---')
+    saver.log_info(params_count)
+    
     for epoch in range(args.epoch):
-        logger.info('# epoch {}'.format(epoch))
-        train_loss = train_epoch(train_dataloader, model, device, optimizer, args.accumulation_steps)
-        val_loss = validate_epoch(val_dataloader, model, device)
-
-        logger.info(
-            '  * training loss = {:.6f}, validation loss = {:.6f}'
-            .format(train_loss, val_loss)
-        )
+        train_loss = train_epoch(train_dataloader, model, device, optimizer, saver, epoch, args.accumulation_steps)
+        val_loss = validate_epoch(val_dataloader, model, device, saver)
 
         scheduler.step(val_loss)
 
-        if val_loss < best_loss:
-            best_loss = val_loss
-            logger.info('  * best validation loss')
-            model_path = 'models/model_iter{}.pth'.format(epoch)
-            torch.save(model.state_dict(), model_path)
-
-        log.append([train_loss, val_loss])
-        with open('loss_{}.json'.format(timestamp), 'w', encoding='utf8') as f:
-            json.dump(log, f, ensure_ascii=False)
+        saver.save_model(model, postfix=str(epoch))
 
 
 if __name__ == '__main__':
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    logger = setup_logger(__name__, 'train_{}.log'.format(timestamp))
-
-    try:
-        main()
-    except Exception as e:
-        logger.exception(e)
+    main()

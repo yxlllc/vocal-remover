@@ -1,8 +1,5 @@
-# install from https://pytorch.org/get-started/locally/
-# torch~=2.1.0
-# torchvision~=0.16.0
-librosa~=0.10.0
-matplotlib~=3.8.0
-opencv_python~=4.8.0
-resampy~=0.4.0
-tqdm~=4.66.0
+librosa
+numpy
+PyYAML
+soundfile
+tqdm

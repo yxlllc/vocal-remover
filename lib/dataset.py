@@ -1,50 +1,31 @@
 import os
 import random
-
+import librosa
 import numpy as np
 import torch
 import torch.utils.data
 from tqdm import tqdm
 
-try:
-    from lib import spec_utils
-except ModuleNotFoundError:
-    import spec_utils
-
 
 class VocalRemoverTrainingSet(torch.utils.data.Dataset):
 
-    def __init__(self, training_set, cropsize, reduction_rate, reduction_weight, mixup_rate, mixup_alpha):
+    def __init__(self, 
+            training_set, 
+            sr, 
+            hop_length, 
+            cropsize, 
+            mixup_rate, 
+            mixup_alpha):
         self.training_set = training_set
+        self.sr = sr
+        self.hop_length = hop_length
         self.cropsize = cropsize
-        self.reduction_rate = reduction_rate
-        self.reduction_weight = reduction_weight
         self.mixup_rate = mixup_rate
         self.mixup_alpha = mixup_alpha
+        self.waveform_sec = (cropsize - 1) * hop_length / sr
 
     def __len__(self):
         return len(self.training_set)
-
-    def read_npy_shape(self, path):
-        with open(path, 'rb') as fhandle:
-            _, _ = np.lib.format.read_magic(fhandle)
-            shape, _, _ = np.lib.format.read_array_header_1_0(fhandle)
-            return shape
-
-    def read_npy_chunk(self, path, start_row):
-        with open(path, 'rb') as fhandle:
-            _, _ = np.lib.format.read_magic(fhandle)
-            shape, fortran, dtype = np.lib.format.read_array_header_1_0(fhandle)
-
-            assert not fortran, 'Fortran order arrays are not supported'
-
-            row_size = np.prod(shape[1:])
-            start_byte = start_row * row_size * dtype.itemsize
-            fhandle.seek(start_byte, 1)
-            n_items = row_size * self.cropsize
-            flat = np.fromfile(fhandle, count=n_items, dtype=dtype)
-
-            return flat.reshape((-1,) + shape[1:])
 
     def aggressively_remove_vocal(self, X, y):
         X_mag = np.abs(X)
@@ -56,19 +37,33 @@ class VocalRemoverTrainingSet(torch.utils.data.Dataset):
 
         return y_mag * np.exp(1.j * np.angle(y))
 
-    def do_crop(self, X_path, y_path):
-        shape = self.read_npy_shape(X_path)
-        start_row = np.random.randint(0, shape[0] - self.cropsize)
-
-        X_crop = self.read_npy_chunk(X_path, start_row).transpose(1, 2, 0)
-        y_crop = self.read_npy_chunk(y_path, start_row).transpose(1, 2, 0)
-
+    def do_crop(self, X_path, y_path, duration):
+        start_time = random.uniform(0, duration - self.waveform_sec - 0.1)
+        X_crop, _ = librosa.load(
+                    X_path,
+                    sr = self.sr,
+                    mono=False,
+                    offset = start_time,
+                    duration = self.waveform_sec)
+        y_crop, _ = librosa.load(
+                    y_path,
+                    sr = self.sr,
+                    mono=False,
+                    offset = start_time,
+                    duration = self.waveform_sec)
+        if X_crop.ndim == 1:
+            X_crop = np.asarray([X_crop])
+        if y_crop.ndim == 1:
+            y_crop = np.asarray([y_crop])
         return X_crop, y_crop
 
     def do_aug(self, X, y):
-        if np.random.uniform() < self.reduction_rate:
-            y = self.aggressively_remove_vocal(X, y)
-
+        max_amp = np.max([np.abs(X).max(), np.abs(y).max()])
+        max_shift = min(1, np.log10(1 / max_amp))
+        log10_shift = random.uniform(-1, max_shift)
+        X =  X * (10 ** log10_shift)
+        y =  y * (10 ** log10_shift)
+        
         if np.random.uniform() < 0.5:
             # swap channel
             X = X[::-1].copy()
@@ -87,13 +82,8 @@ class VocalRemoverTrainingSet(torch.utils.data.Dataset):
 
     def do_mixup(self, X, y):
         idx = np.random.randint(0, len(self))
-        X_path, y_path, coef = self.training_set[idx]
 
-        X_i, y_i = self.do_crop(X_path, y_path)
-        X_i /= coef
-        y_i /= coef
-
-        X_i, y_i = self.do_aug(X_i, y_i)
+        X_i, y_i = self.__getitem__(idx, skip_mix=True)
 
         lam = np.random.beta(self.mixup_alpha, self.mixup_alpha)
         X = lam * X + (1 - lam) * X_i
@@ -101,44 +91,50 @@ class VocalRemoverTrainingSet(torch.utils.data.Dataset):
 
         return X, y
 
-    def __getitem__(self, idx):
-        X_path, y_path, coef = self.training_set[idx]
-
-        X, y = self.do_crop(X_path, y_path)
-        X /= coef
-        y /= coef
-
+    def __getitem__(self, idx, skip_mix=False):
+        X_path, y_path = self.training_set[idx]
+        X_duration = librosa.get_duration(filename = X_path, sr = self.sr)
+        y_duration = librosa.get_duration(filename = y_path, sr = self.sr)
+        duration = min(X_duration, y_duration)
+        if duration < (self.waveform_sec + 0.1):
+            return self.__getitem__((idx + 1) % len(self), skip_mix=skip_mix)
+        
+        X, y = self.do_crop(X_path, y_path, duration)
         X, y = self.do_aug(X, y)
-
-        if np.random.uniform() < self.mixup_rate:
+        if not skip_mix and np.random.uniform() < self.mixup_rate:
             X, y = self.do_mixup(X, y)
-
-        X_mag = np.abs(X)
-        y_mag = np.abs(y)
-
-        return X_mag, y_mag
-        # return X, y
-
+        return X, y
 
 class VocalRemoverValidationSet(torch.utils.data.Dataset):
-
-    def __init__(self, patch_list):
-        self.patch_list = patch_list
+    def __init__(self, validation_set, sr):
+        self.validation_set = validation_set
+        self.sr = sr
 
     def __len__(self):
-        return len(self.patch_list)
+        return len(self.validation_set)
 
     def __getitem__(self, idx):
-        path = self.patch_list[idx]
-        data = np.load(path)
-
-        X, y = data['X'], data['y']
-
-        X_mag = np.abs(X)
-        y_mag = np.abs(y)
-
-        return X_mag, y_mag
-        # return X, y
+        X_path, y_path = self.validation_set[idx]
+        X_duration = librosa.get_duration(filename = X_path, sr = self.sr)
+        y_duration = librosa.get_duration(filename = y_path, sr = self.sr)
+        duration = min(X_duration, y_duration)
+        X_crop, _ = librosa.load(
+                    X_path,
+                    sr = self.sr,
+                    mono=False,
+                    offset = 0,
+                    duration = duration)
+        y_crop, _ = librosa.load(
+                    y_path,
+                    sr = self.sr,
+                    mono=False,
+                    offset = 0,
+                    duration = duration)
+        if X_crop.ndim == 1:
+            X_crop = np.asarray([X_crop])
+        if y_crop.ndim == 1:
+            y_crop = np.asarray([y_crop])                    
+        return X_crop, y_crop
 
 
 def make_pair(mix_dir, inst_dir):
@@ -160,7 +156,7 @@ def make_pair(mix_dir, inst_dir):
     return filelist
 
 
-def train_val_split(dataset_dir, split_mode, val_rate, val_filelist):
+def train_val_split(dataset_dir, split_mode, val_num, val_filelist):
     if split_mode == 'random':
         filelist = make_pair(
             os.path.join(dataset_dir, 'mixtures'),
@@ -170,9 +166,8 @@ def train_val_split(dataset_dir, split_mode, val_rate, val_filelist):
         random.shuffle(filelist)
 
         if len(val_filelist) == 0:
-            val_size = int(len(filelist) * val_rate)
-            train_filelist = filelist[:-val_size]
-            val_filelist = filelist[-val_size:]
+            train_filelist = filelist[:-val_num]
+            val_filelist = filelist[-val_num:]
         else:
             train_filelist = [
                 pair for pair in filelist
@@ -205,29 +200,28 @@ def make_padding(width, cropsize, offset):
     return left, right, roi_size
 
 
-def make_training_set(filelist, sr, hop_length, n_fft):
+def make_training_set(filelist, sr, hop_length, n_fft, device):
     ret = []
+    window = torch.hann_window(n_fft).to(device)
     for X_path, y_path in tqdm(filelist):
         X, y, X_cache_path, y_cache_path = spec_utils.cache_or_load(
-            X_path, y_path, sr, hop_length, n_fft
+            X_path, y_path, sr, hop_length, n_fft, window, read_cache=False,
         )
-        coef = np.max([np.abs(X).max(), np.abs(y).max()])
-        ret.append([X_cache_path, y_cache_path, coef])
+        ret.append([X_cache_path, y_cache_path])
 
     return ret
 
 
-def make_validation_set(filelist, cropsize, sr, hop_length, n_fft, offset):
+def make_validation_set(filelist, cropsize, sr, hop_length, n_fft, offset, device):
     patch_list = []
     patch_dir = 'cs{}_sr{}_hl{}_nf{}_of{}'.format(cropsize, sr, hop_length, n_fft, offset)
     os.makedirs(patch_dir, exist_ok=True)
-
+    window = torch.hann_window(n_fft).to(device)
+    
     for X_path, y_path in tqdm(filelist):
         basename = os.path.splitext(os.path.basename(X_path))[0]
 
-        X, y, _, _ = spec_utils.cache_or_load(X_path, y_path, sr, hop_length, n_fft)
-        coef = np.max([np.abs(X).max(), np.abs(y).max()])
-        X, y = X / coef, y / coef
+        X, y, _, _ = spec_utils.cache_or_load(X_path, y_path, sr, hop_length, n_fft, window)
 
         l, r, roi_size = make_padding(X.shape[2], cropsize, offset)
         X_pad = np.pad(X, ((0, 0), (0, 0), (l, r)), mode='constant')

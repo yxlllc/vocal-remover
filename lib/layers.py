@@ -2,7 +2,23 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
-from lib import spec_utils
+
+def crop_center(h1, h2):
+    h1_shape = h1.size()
+    h2_shape = h2.size()
+
+    if h1_shape[3] == h2_shape[3]:
+        return h1
+    elif h1_shape[3] < h2_shape[3]:
+        raise ValueError('h1_shape[3] must be greater than h2_shape[3]')
+
+    # s_freq = (h2_shape[2] - h1_shape[2]) // 2
+    # e_freq = s_freq + h1_shape[2]
+    s_time = (h1_shape[3] - h2_shape[3]) // 2
+    e_time = s_time + h2_shape[3]
+    h1 = h1[:, :, :, s_time:e_time]
+
+    return h1
 
 
 class Conv2DBNActiv(nn.Module):
@@ -52,7 +68,7 @@ class Decoder(nn.Module):
         x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
 
         if skip is not None:
-            skip = spec_utils.crop_center(skip, x)
+            skip = crop_center(skip, x)
             x = torch.cat([x, skip], dim=1)
 
         h = self.conv1(x)
