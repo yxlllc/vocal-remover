@@ -183,7 +183,7 @@ class CascadedNet(nn.Module):
         B, C, T = x.shape
         x = x.reshape(B * C, T)
         n_frames = T // self.hop_length + 1
-        T_pad = (32 * ((n_frames - 1) // 32 + 1) - 1) * self.hop_length - T
+        T_pad = (32 * (n_frames // 32 + 1) - 1) * self.hop_length - T
         nl_pad = T_pad // 2 // self.hop_length
         Tl_pad = nl_pad * self.hop_length
         x = F.pad(x, (Tl_pad , T_pad - Tl_pad))
