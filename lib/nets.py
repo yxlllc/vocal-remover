@@ -50,7 +50,6 @@ class CascadedNet(nn.Module):
         self.is_complex = is_complex
         self.is_mono = is_mono
         self.register_buffer("window", torch.hann_window(n_fft), persistent=False)
-        self.window = None
         self.max_bin = n_fft // 2
         self.output_bin = n_fft // 2 + 1
         self.nin_lstm = self.max_bin // 2
