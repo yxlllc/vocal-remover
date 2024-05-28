@@ -49,6 +49,13 @@ python train.py --dataset path/to/dataset --gpu 0 --mono --exp_name your_exp_nam
 python train.py --dataset path/to/dataset --gpu 0 --exp_name your_exp_name
 ```
 
+### Export the model
+```
+# requirements: PyTorch >= 2.1.0
+pip install onnx onnxsim
+python export.py path/to/model.pt path/to/model.onnx
+```
+
 ## References
 - [1] Jansson et al., "Singing Voice Separation with Deep U-Net Convolutional Networks", https://ejhumphrey.com/assets/pdf/jansson2017singing.pdf
 - [2] Takahashi et al., "Multi-scale Multi-band DenseNets for Audio Source Separation", https://arxiv.org/pdf/1706.09588.pdf
