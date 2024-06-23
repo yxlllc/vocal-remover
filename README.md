@@ -18,12 +18,12 @@ The following command separates the input into instrumental and vocal tracks. Th
 
 ### Run on CPU
 ```
-python inference.py --input path/to/an/audio/file
+python inference.py --input path/to/an/audio/file -P path/to/an/model/weight
 ```
 
 ### Run on GPU
 ```
-python inference.py --input path/to/an/audio/file --gpu 0
+python inference.py --input path/to/an/audio/file -P path/to/an/model/weight --gpu 0
 ```
 
 ## Train your own model
