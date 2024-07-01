@@ -133,3 +133,4 @@ if __name__ == '__main__':
         )
         onnx_model, check = onnxsim.simplify(args.output_path, include_subgraph=True)
         assert check, 'Simplified ONNX model could not be validated'
+        onnx.save(onnx_model, args.output_path)
