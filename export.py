@@ -1,6 +1,7 @@
 import argparse
 import pathlib
 
+import onnx
 import onnxsim
 import torch
 import torch.nn.functional as F
@@ -131,5 +132,6 @@ if __name__ == '__main__':
             },
             opset_version=17
         )
-        onnx_model, check = onnxsim.simplify(args.output_path, include_subgraph=True)
-        assert check, 'Simplified ONNX model could not be validated'
+    onnx_model, check = onnxsim.simplify(args.output_path, include_subgraph=True)
+    assert check, 'Simplified ONNX model could not be validated'
+    onnx.save(onnx_model, args.output_path)
