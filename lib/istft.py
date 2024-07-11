@@ -111,6 +111,6 @@ class iSTFT(nn.Module):
         rm_start, rm_end = self.pad_amount, self.pad_amount + length
         outputs = outputs[..., rm_start:rm_end]
         coff = coff[..., rm_start:rm_end]
-        coffidx = torch.where(coff > 1e-8)
-        outputs[coffidx] = outputs[coffidx] / (coff[coffidx])
+        coff = torch.where(coff > 1e-8, coff, torch.ones_like(coff))
+        outputs /= coff
         return outputs.squeeze(dim=1)
