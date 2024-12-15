@@ -82,19 +82,25 @@ if __name__ == '__main__':
         else:
             X = np.asarray([X, X])
     
-    result = np.zeros(0)
-    result2 = np.zeros(0)
+    result_h = np.zeros(0)
+    result_hb = np.zeros(0)
+    result_he = np.zeros(0)
+    result_n = np.zeros(0)
     current_length = 0
     segments = split(X, model_args.sr)
     print('Cut the input audio into ' + str(len(segments)) + ' slices')
     with torch.no_grad():
         for segment in tqdm(segments):
             seg_input = torch.from_numpy(segment).float().unsqueeze(0).to(device)
-            seg_output = model.predict_fromaudio(seg_input)
-            seg_output = seg_output.cpu().numpy()
-            result = np.append(result, seg_output)
+            seg_output_h, seg_output_hb, seg_output_he = model.predict_fromaudio(seg_input, hb_th=0.001, he_th=0.001)
+            seg_output_h = seg_output_h.cpu().numpy()
+            seg_output_hb = seg_output_hb.cpu().numpy()
+            seg_output_he = seg_output_he.cpu().numpy()
+            result_h = np.append(result_h, seg_output_h)
+            result_hb = np.append(result_hb, seg_output_hb)
+            result_he = np.append(result_he, seg_output_he)
             print('validating output directory...', end=' ')
-    result2 = X - result
+    result_n = X - result_h
     
     output_dir = args.output_dir
     if output_dir != "":  # modifies output_dir if theres an arg specified
@@ -102,5 +108,7 @@ if __name__ == '__main__':
         os.makedirs(output_dir, exist_ok=True)
     print('done')
     
-    sf.write('{}{}_Instruments.wav'.format(output_dir, basename), result.T, sr)
-    sf.write('{}{}_Vocals.wav'.format(output_dir, basename), result2.T, sr)
+    sf.write('{}{}_harmonic.wav'.format(output_dir, basename), result_h.T, sr)
+    sf.write('{}{}_harmonic_base.wav'.format(output_dir, basename), result_hb.T, sr)
+    sf.write('{}{}_harmonic_even.wav'.format(output_dir, basename), result_he.T, sr)
+    sf.write('{}{}_noise.wav'.format(output_dir, basename), result_n.T, sr)

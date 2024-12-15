@@ -79,10 +79,10 @@ class CascadedNet(nn.Module):
             3 * nout // 4 + nin, nout, self.nin_lstm, nout_lstm
         )
 
-        self.out = nn.Conv2d(nout, nin, 1, bias=False)
+        self.out = nn.Conv2d(nout, 3 * nin, 1, bias=False)
         self.aux_out = nn.Conv2d(3 * nout // 4, nin, 1, bias=False)
 
-    def forward(self, x):
+    def forward(self, x, hb_th=0.0, he_th=0.0):
         if self.is_complex:
             x = torch.cat([x.real, x.imag], dim=1)
 
@@ -107,44 +107,30 @@ class CascadedNet(nn.Module):
         if self.is_complex:
             mask = self.out(f3)
             if self.is_mono:
-                mask = torch.complex(mask[:, :1], mask[:, 1:])
+                mask = torch.complex(mask[:, :3], mask[:, 3:])
             else:
-                mask = torch.complex(mask[:, :2], mask[:, 2:])
+                mask = torch.complex(mask[:, :6], mask[:, 6:])
             mask = self.bounded_mask(mask)
         else:
             mask = torch.sigmoid(self.out(f3))
-
         mask = F.pad(
             input=mask,
             pad=(0, 0, 0, self.output_bin - mask.size()[2]),
             mode='replicate'
         )
-
-        return mask
+        mask_h, mask_hb, mask_he = torch.split(mask, mask.size(1) // 3, dim=1)
+        if hb_th > 0:
+            mask_hb[mask_hb.abs() < hb_th] = 0
+        if he_th > 0:
+            mask_he[mask_he.abs() < he_th] = 0
+        mask_hb = mask_h * mask_hb
+        mask_he = mask_h * mask_he
+        return mask_h, mask_hb, mask_he
 
     def bounded_mask(self, mask, eps=1e-8):
         mask_mag = torch.abs(mask)
         mask = torch.tanh(mask_mag) * mask / (mask_mag + eps)
         return mask
-
-    def predict_mask(self, x):
-        mask = self.forward(x)
-
-        if self.offset > 0:
-            mask = mask[:, :, :, self.offset:-self.offset]
-            assert mask.size()[3] > 0
-
-        return mask
-
-    def predict(self, x):
-        mask = self.forward(x)
-        pred = x * mask
-
-        if self.offset > 0:
-            pred = pred[:, :, :, self.offset:-self.offset]
-            assert pred.size()[3] > 0
-
-        return pred
 
     def audio2spec(self, x, use_pad=False):
         B, C, T = x.shape
@@ -173,7 +159,7 @@ class CascadedNet(nn.Module):
         x = x.reshape(B, C, -1)
         return x
 
-    def predict_fromaudio(self, x):
+    def predict_fromaudio(self, x, return_h=True, return_hb=True, return_he=True, hb_th=0.0, he_th=0.0):
         B, C, T = x.shape
         x = x.reshape(B * C, T)
         n_frames = T // self.hop_length + 1
@@ -190,10 +176,34 @@ class CascadedNet(nn.Module):
             pad_mode='constant'
         )
         spec = spec.reshape(B, C, spec.shape[-2], spec.shape[-1])
-        mask = self.forward(spec)
-        spec_pred = spec * mask
-        spec_pred = spec_pred.reshape(B * C, spec.shape[-2], spec.shape[-1])
-        x_pred = torch.istft(spec_pred, self.n_fft, self.hop_length, window=self.window)
-        x_pred = x_pred[:, Tl_pad: Tl_pad + T]
-        x_pred = x_pred.reshape(B, C, T)
-        return x_pred
+        
+        mask_h, mask_hb, mask_he = self.forward(spec, hb_th=hb_th, he_th=he_th)
+        
+        if return_h:
+            spec_h = spec * mask_h
+            spec_h = spec_h.reshape(B * C, spec.shape[-2], spec.shape[-1])
+            x_h = torch.istft(spec_h, self.n_fft, self.hop_length, window=self.window)
+            x_h = x_h[:, Tl_pad: Tl_pad + T]
+            x_h = x_h.reshape(B, C, T)
+        else:
+            x_h = None
+            
+        if return_hb:
+            spec_hb = spec * mask_hb
+            spec_hb = spec_hb.reshape(B * C, spec.shape[-2], spec.shape[-1])
+            x_hb = torch.istft(spec_hb, self.n_fft, self.hop_length, window=self.window)
+            x_hb = x_hb[:, Tl_pad: Tl_pad + T]
+            x_hb = x_hb.reshape(B, C, T)
+        else:
+            x_hb = None
+            
+        if return_he:
+            spec_he = spec * mask_he
+            spec_he = spec_he.reshape(B * C, spec.shape[-2], spec.shape[-1])
+            x_he = torch.istft(spec_he, self.n_fft, self.hop_length, window=self.window)
+            x_he = x_he[:, Tl_pad: Tl_pad + T]
+            x_he = x_he.reshape(B, C, T)
+        else:
+            x_he = None
+               
+        return x_h, x_hb, x_he

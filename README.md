@@ -14,7 +14,7 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-The following command separates the input into instrumental and vocal tracks. They are saved as `*_Instruments.wav` and `*_Vocals.wav`.
+The following command separates the human voice input into harmonic, base-harmonic, even-harmonic and noise tracks.
 
 ### Run on CPU
 ```
@@ -31,7 +31,15 @@ python inference.py --input path/to/an/audio/file -P path/to/an/model/weight --g
 ### Place your dataset
 ```
 path/to/dataset/
-  +- instruments/
+  +- harmonic/
+  |    +- aaa.wav
+  |    +- bbb.wav
+  |    +- ...
+  +- harmonic_base/
+  |    +- aaa.wav
+  |    +- bbb.wav
+  |    +- ...
+  +- harmonic_even/
   |    +- aaa.wav
   |    +- bbb.wav
   |    +- ...
@@ -47,13 +55,6 @@ path/to/dataset/
 python train.py --dataset path/to/dataset --gpu 0 --mono --exp_name your_exp_name
 # train a stereo model 训练立体声模型
 python train.py --dataset path/to/dataset --gpu 0 --exp_name your_exp_name
-```
-
-### Export the model
-```
-# requirements: PyTorch >= 2.1.0
-pip install onnx onnxsim
-python export.py path/to/model.pt path/to/model.onnx
 ```
 
 ## References

@@ -19,21 +19,31 @@ def train_epoch(dataloader, model, device, optimizer, saver, epoch, accumulation
     sum_loss = 0
     crit_l1 = nn.L1Loss()
 
-    for itr, (X_batch, y_batch) in enumerate(dataloader):
+    for itr, (X, y, y1, y2) in enumerate(dataloader):
         saver.global_step_increment()
-        X_batch = X_batch.to(device)
-        y_batch = y_batch = y_batch.to(device)
-        y_pred = model.predict_fromaudio(X_batch)
+        X = X.to(device)
+        y = y.to(device)
+        y1 = y1.to(device)
+        y2 = y2.to(device)
+        y_pred, y1_pred, y2_pred = model.predict_fromaudio(X)
         
-        X_batch_amp = X_batch.abs().amax(dim=(1,2)).reshape(-1,1,1) + 1e-3
-        y_pred = y_pred / X_batch_amp
-        y_batch = y_batch / X_batch_amp
+        X_amp = X.abs().amax(dim=(1,2)).reshape(-1,1,1) + 1e-3
+        y = y / X_amp
+        y1 = y1 / X_amp
+        y2 = y2 / X_amp
+        y_pred = y_pred / X_amp
+        y1_pred = y1_pred / X_amp
+        y2_pred = y2_pred / X_amp
         
-        y_spec_pred = model.audio2spec(y_pred)      
-        y_spec_batch = model.audio2spec(y_batch)
-
-        spec_loss = crit_l1(y_spec_batch, y_spec_pred)
-        wav_loss = crit_l1(y_batch, y_pred)
+        ys = model.audio2spec(y)
+        ys1 = model.audio2spec(y1)
+        ys2 = model.audio2spec(y2)
+        ys_pred = model.audio2spec(y_pred)
+        ys1_pred = model.audio2spec(y1_pred)
+        ys2_pred = model.audio2spec(y2_pred)
+        
+        spec_loss = (crit_l1(ys, ys_pred) + crit_l1(ys1, ys1_pred) + crit_l1(ys2, ys2_pred)) / 3
+        wav_loss = (crit_l1(y, y_pred) + crit_l1(y1, y1_pred) + crit_l1(y2, y2_pred)) / 3 
         loss = spec_loss + wav_loss
 
         current_lr =  optimizer.param_groups[0]['lr']
@@ -63,7 +73,7 @@ def train_epoch(dataloader, model, device, optimizer, saver, epoch, accumulation
             optimizer.step()
             model.zero_grad()
 
-        sum_loss += loss.item() * len(X_batch)
+        sum_loss += loss.item() * len(X)
 
     if (itr + 1) % accumulation_steps != 0:
         optimizer.step()
@@ -81,20 +91,26 @@ def validate_epoch(dataloader, model, device, saver):
     crit_l1 = nn.L1Loss()
 
     with torch.no_grad():
-        for X_batch, y_batch in dataloader:
-            y_pred = model.predict_fromaudio(X_batch.to(device))
-            y_batch = y_batch.to(device)
+        for X, y, y1, y2 in dataloader:
+            y_pred, y1_pred, y2_pred = model.predict_fromaudio(X.to(device))
+            y = y.to(device)
+            y1 = y1.to(device)
+            y2 = y2.to(device)
                      
-            y_spec_pred = model.audio2spec(y_pred)      
-            y_spec_batch = model.audio2spec(y_batch)
+            ys = model.audio2spec(y)
+            ys1 = model.audio2spec(y1)
+            ys2 = model.audio2spec(y2)
+            ys_pred = model.audio2spec(y_pred)
+            ys1_pred = model.audio2spec(y1_pred)
+            ys2_pred = model.audio2spec(y2_pred)
 
-            spec_loss = crit_l1(y_spec_batch, y_spec_pred)
-            wav_loss = crit_l1(y_batch, y_pred)
+            spec_loss = (crit_l1(ys, ys_pred) + crit_l1(ys1, ys1_pred) + crit_l1(ys2, ys2_pred)) / 3
+            wav_loss = (crit_l1(y, y_pred) + crit_l1(y1, y1_pred) + crit_l1(y2, y2_pred)) / 3 
             loss = spec_loss + wav_loss
 
-            sum_spec_loss += spec_loss.item() * len(X_batch)
-            sum_wav_loss += wav_loss.item() * len(X_batch)
-            sum_loss += loss.item() * len(X_batch)
+            sum_spec_loss += spec_loss.item() * len(X)
+            sum_wav_loss += wav_loss.item() * len(X)
+            sum_loss += loss.item() * len(X)
             
     mean_spec_loss = sum_spec_loss / len(dataloader.dataset)
     mean_wav_loss = sum_wav_loss / len(dataloader.dataset)
