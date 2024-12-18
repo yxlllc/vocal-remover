@@ -129,12 +129,14 @@ def main():
     p.add_argument('--val_filelist', '-V', type=str, default=None)
     p.add_argument('--num_workers', '-w', type=int, default=4)
     p.add_argument('--epoch', '-E', type=int, default=200)
+    p.add_argument('--copy_rate', '-R', type=float, default=0.01)
     p.add_argument('--mixup_rate', '-M', type=float, default=0.5)
     p.add_argument('--mixup_alpha', '-a', type=float, default=1.0)
     p.add_argument('--pretrained_model', '-P', type=str, default=None)
     p.add_argument('--exp_name', '-N', type=str, default="model_test")
     p.add_argument('--mono', action='store_true')
     p.add_argument('--debug', action='store_true')
+    p.add_argument('--fixed_length', action='store_true')
     args = p.parse_args()
 
     random.seed(args.seed)
@@ -158,7 +160,8 @@ def main():
         val_filelist = val_filelist[:1]
 
     device = torch.device('cpu')
-    model = nets.CascadedNet(args.n_fft, args.hop_length, args.n_out, args.n_out_lstm, True, is_mono=args.mono)
+    model = nets.CascadedNet(args.n_fft, args.hop_length, args.n_out, args.n_out_lstm, True, 
+                is_mono=args.mono, fixed_length=args.fixed_length)
     if args.pretrained_model is not None:
         print("loading pretrained model: "+ args.pretrained_model)
         model.load_state_dict(torch.load(args.pretrained_model, map_location=device))
@@ -185,6 +188,7 @@ def main():
         sr=args.sr,
         hop_length=args.hop_length,
         cropsize=args.cropsize,
+        copy_rate=args.copy_rate,
         mixup_rate=args.mixup_rate,
         mixup_alpha=args.mixup_alpha
     )

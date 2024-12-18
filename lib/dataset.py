@@ -55,12 +55,14 @@ class VocalRemoverTrainingSet(torch.utils.data.Dataset):
             sr, 
             hop_length, 
             cropsize, 
+            copy_rate,
             mixup_rate, 
             mixup_alpha):
         self.training_set = training_set
         self.sr = sr
         self.hop_length = hop_length
         self.cropsize = cropsize
+        self.copy_rate = copy_rate
         self.mixup_rate = mixup_rate
         self.mixup_alpha = mixup_alpha
         self.waveform_sec = (cropsize - 1) * hop_length / sr
@@ -100,7 +102,7 @@ class VocalRemoverTrainingSet(torch.utils.data.Dataset):
             X = X[::-1].copy()
             y = y[::-1].copy()
 
-        if np.random.uniform() < 0.01:
+        if np.random.uniform() < self.copy_rate:
             # inst
             X = y.copy()
 

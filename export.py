@@ -12,8 +12,8 @@ from logger.utils import DotDict
 
 
 class CascadedNetONNX(CascadedNet):
-    def __init__(self, n_fft, hop_length, nout=32, nout_lstm=128):
-        super().__init__(n_fft, hop_length, nout, nout_lstm, True, True)
+    def __init__(self, n_fft, hop_length, nout=32, nout_lstm=128, fixed_length=True):
+        super().__init__(n_fft, hop_length, nout, nout_lstm, True, True, fixed_length)
         self.istft = iSTFT(
             win_len=n_fft,
             win_hop=hop_length,
@@ -101,7 +101,8 @@ def load_sep_model(model_path, device='cpu'):
         args.n_fft,
         args.hop_length,
         args.n_out,
-        args.n_out_lstm
+        args.n_out_lstm,
+        True if args.fixed_length is None else args.fixed_length
     )
     model.to(device)
     model.load_state_dict(torch.load(model_path, map_location='cpu'))

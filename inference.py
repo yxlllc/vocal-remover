@@ -30,7 +30,8 @@ def load_sep_model(model_path, device='cpu'):
                 args.n_out, 
                 args.n_out_lstm, 
                 True, 
-                is_mono=args.is_mono)
+                is_mono=args.is_mono,
+                fixed_length = True if args.fixed_length is None else args.fixed_length)
     model.to(device)
     model.load_state_dict(torch.load(model_path, map_location='cpu'))
     model.eval()

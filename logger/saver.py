@@ -46,7 +46,8 @@ class Saver(object):
         'hop_length': args.hop_length,
         'n_out': args.n_out,
         'n_out_lstm': args.n_out_lstm,
-        'is_mono': args.mono,}
+        'is_mono': args.mono,
+        'fixed_length':args.fixed_length}
         with open(path_config, "w") as out_config:
             yaml.dump(d, out_config)
             
