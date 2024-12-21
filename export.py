@@ -62,8 +62,8 @@ class CascadedNetONNX(CascadedNet):
     def forward(self, x):  # [B, T]
         x_gt = x
         T = x.size(1)
-        n_frames = T // self.hop_length + 1
-        T_pad = (32 * (n_frames // 32 + 1) - 1) * self.hop_length - T
+        T1 = T + self.hop_length
+        T_pad = self.seg_length * ((T1 - 1) // self.seg_length + 1) - T1
         nl_pad = T_pad // 2 // self.hop_length
         Tl_pad = nl_pad * self.hop_length
         x = F.pad(x, (Tl_pad, T_pad - Tl_pad))
