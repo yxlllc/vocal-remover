@@ -4,49 +4,9 @@ import librosa
 import numpy as np
 import torch
 import torch.utils.data
+import pathlib
 from tqdm import tqdm
 
-
-def traverse_dir(
-        root_dir,
-        extensions,
-        amount=None,
-        str_include=None,
-        str_exclude=None,
-        is_pure=True,
-        is_sort=True,
-        is_ext=True):
-
-    file_list = []
-    cnt = 0
-    for root, _, files in os.walk(root_dir):
-        for file in files:
-            if any([file.endswith(f".{ext}") for ext in extensions]):
-                # path
-                mix_path = os.path.join(root, file)
-                pure_path = mix_path[len(root_dir)+1:] if is_pure else mix_path
-
-                # amount
-                if (amount is not None) and (cnt == amount):
-                    if is_sort:
-                        file_list.sort()
-                    return file_list
-                
-                # check string
-                if (str_include is not None) and (str_include not in pure_path):
-                    continue
-                if (str_exclude is not None) and (str_exclude in pure_path):
-                    continue
-                
-                if not is_ext:
-                    ext = pure_path.split('.')[-1]
-                    pure_path = pure_path[:-(len(ext)+1)]
-                file_list.append(pure_path)
-                cnt += 1
-    if is_sort:
-        file_list.sort()
-    return file_list
-    
     
 class VocalRemoverTrainingSet(torch.utils.data.Dataset):
 
@@ -172,10 +132,22 @@ class VocalRemoverValidationSet(torch.utils.data.Dataset):
 
 
 def make_pair(mix_dir, inst_dir):
-    input_exts = ['wav', 'flac']
-    X_list = traverse_dir(mix_dir, input_exts, is_pure=False, is_sort=True, is_ext=True)
-    y_list = traverse_dir(inst_dir, input_exts, is_pure=False, is_sort=True, is_ext=True)
+    input_exts = ['.wav', '.m4a', '.mp3', '.mp4', '.flac']
+    
+    mix_dir = pathlib.Path(mix_dir)
+    inst_dir = pathlib.Path(inst_dir)
+    X_list = sorted([
+        fpath
+        for fpath in mix_dir.glob('**/*')
+        if fpath.suffix in input_exts
+    ])
+    y_list = [
+        inst_dir / fpath.relative_to(mix_dir)
+        for fpath in X_list
+    ]
+
     filelist = list(zip(X_list, y_list))
+
     return filelist
 
 
