@@ -68,7 +68,10 @@ class Decoder(nn.Module):
         if fixed_length:
             x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
         else:
-            x = F.interpolate(x, scale_factor=2, mode='nearest')
+            _, _, h, w = x.size() 
+            x = F.pad(x, (0, 1, 0, 1), mode='replicate')
+            x = F.interpolate(x, size=(2*h+1,2*w+1), mode='bilinear', align_corners=True)
+            x = x[:, :, :-1, :-1]
 
         if skip is not None:
             skip = crop_center(skip, x)
