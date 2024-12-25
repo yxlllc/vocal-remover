@@ -47,6 +47,7 @@ class CascadedNet(nn.Module):
         super(CascadedNet, self).__init__()
         self.n_fft = n_fft
         self.hop_length = hop_length
+        self.seg_length = 32 * hop_length
         self.is_complex = is_complex
         self.is_mono = is_mono
         self.register_buffer("window", torch.hann_window(n_fft), persistent=False)
@@ -136,8 +137,8 @@ class CascadedNet(nn.Module):
         B, C, T = x.shape
         x = x.reshape(B * C, T)
         if use_pad:
-            n_frames = T // self.hop_length + 1
-            T_pad = (32 * ((n_frames - 1) // 32 + 1) - 1) * self.hop_length - T
+            T1 = T + self.hop_length
+            T_pad = self.seg_length * ((T1 - 1) // self.seg_length + 1) - T1
             nl_pad = T_pad // 2 // self.hop_length
             Tl_pad = nl_pad * self.hop_length
             x = F.pad(x, (Tl_pad, T_pad - Tl_pad))
@@ -162,8 +163,8 @@ class CascadedNet(nn.Module):
     def predict_fromaudio(self, x, return_h=True, return_hb=True, return_he=True, hb_th=0.0, he_th=0.0):
         B, C, T = x.shape
         x = x.reshape(B * C, T)
-        n_frames = T // self.hop_length + 1
-        T_pad = (32 * (n_frames // 32 + 1) - 1) * self.hop_length - T
+        T1 = T + self.hop_length
+        T_pad = self.seg_length * ((T1 - 1) // self.seg_length + 1) - T1       
         nl_pad = T_pad // 2 // self.hop_length
         Tl_pad = nl_pad * self.hop_length
         x = F.pad(x, (Tl_pad, T_pad - Tl_pad))
