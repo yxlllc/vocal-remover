@@ -60,60 +60,40 @@ class CascadedNet(nn.Module):
         if is_mono:
             nin = nin // 2
 
-        self.stg1_low_band_net = nn.Sequential(
-            BaseNet(nin, nout // 2, self.nin_lstm // 2, nout_lstm),
-            layers.Conv2DBNActiv(nout // 2, nout // 4, 1, 1, 0)
-        )
-        self.stg1_high_band_net = BaseNet(
-            nin, nout // 4, self.nin_lstm // 2, nout_lstm // 2
+
+        self.stg1_full_band_net = BaseNet(
+            nin, nout // 2, self.nin_lstm, nout_lstm
         )
 
-        self.stg2_low_band_net = nn.Sequential(
-            BaseNet(nout // 4 + nin, nout, self.nin_lstm // 2, nout_lstm),
-            layers.Conv2DBNActiv(nout, nout // 2, 1, 1, 0)
-        )
-        self.stg2_high_band_net = BaseNet(
-            nout // 4 + nin, nout // 2, self.nin_lstm // 2, nout_lstm // 2
+        self.stg2_full_band_net = BaseNet(
+            nout // 2 + nin, nout // 2, self.nin_lstm, nout_lstm
         )
 
         self.stg3_full_band_net = BaseNet(
-            3 * nout // 4 + nin, nout, self.nin_lstm, nout_lstm
+            nout + nin, nout, self.nin_lstm, nout_lstm
         )
 
         self.out = nn.Conv2d(nout, 3 * nin, 1, bias=False)
-        self.aux_out = nn.Conv2d(3 * nout // 4, nin, 1, bias=False)
 
     def forward(self, x, hb_th=0.0, he_th=0.0):
         if self.is_complex:
             x = torch.cat([x.real, x.imag], dim=1)
 
         x = x[:, :, :self.max_bin]
-
-        bandw = x.size()[2] // 2
-        l1_in = x[:, :, :bandw]
-        h1_in = x[:, :, bandw:]
-        l1 = self.stg1_low_band_net(l1_in)
-        h1 = self.stg1_high_band_net(h1_in)
-        aux1 = torch.cat([l1, h1], dim=2)
-
-        l2_in = torch.cat([l1_in, l1], dim=1)
-        h2_in = torch.cat([h1_in, h1], dim=1)
-        l2 = self.stg2_low_band_net(l2_in)
-        h2 = self.stg2_high_band_net(h2_in)
-        aux2 = torch.cat([l2, h2], dim=2)
-
-        f3_in = torch.cat([x, aux1, aux2], dim=1)
-        f3 = self.stg3_full_band_net(f3_in)
+         
+        x = torch.cat((x, self.stg1_full_band_net(x)), dim=1)
+        x = torch.cat((x, self.stg2_full_band_net(x)), dim=1)
+        x = self.stg3_full_band_net(x)
 
         if self.is_complex:
-            mask = self.out(f3)
+            mask = self.out(x)
             if self.is_mono:
                 mask = torch.complex(mask[:, :3], mask[:, 3:])
             else:
                 mask = torch.complex(mask[:, :6], mask[:, 6:])
             mask = self.bounded_mask(mask)
         else:
-            mask = torch.sigmoid(self.out(f3))
+            mask = torch.sigmoid(self.out(x))
         mask = F.pad(
             input=mask,
             pad=(0, 0, 0, self.output_bin - mask.size()[2]),
