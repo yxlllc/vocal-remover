@@ -32,23 +32,11 @@ class CascadedNetONNX(CascadedNet):
     def _forward(self, x):
         x = x[:, :, :self.max_bin]
 
-        bandw = x.size(2) // 2
-        l1_in = x[:, :, :bandw]
-        h1_in = x[:, :, bandw:]
-        l1 = self.stg1_low_band_net(l1_in)
-        h1 = self.stg1_high_band_net(h1_in)
-        aux1 = torch.cat([l1, h1], dim=2)
+        x = torch.cat((x, self.stg1_full_band_net(x)), dim=1)
+        x = torch.cat((x, self.stg2_full_band_net(x)), dim=1)
+        x = self.stg3_full_band_net(x)
 
-        l2_in = torch.cat([l1_in, l1], dim=1)
-        h2_in = torch.cat([h1_in, h1], dim=1)
-        l2 = self.stg2_low_band_net(l2_in)
-        h2 = self.stg2_high_band_net(h2_in)
-        aux2 = torch.cat([l2, h2], dim=2)
-
-        f3_in = torch.cat([x, aux1, aux2], dim=1)
-        f3 = self.stg3_full_band_net(f3_in)
-
-        mask = self.out(f3)  # [B, 2, N, T]
+        mask = self.out(x)  # [B, 2, N, T]
         mask = self.bounded_mask(mask)
 
         mask = F.pad(
